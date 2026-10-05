@@ -10,6 +10,8 @@ public class ServerMain {
 
         int port = 5000;
 
+        EventManager eventManager = new EventManager();
+
         try {
             ServerSocket serverSocket = new ServerSocket(port);
 
@@ -28,7 +30,10 @@ public class ServerMain {
                 );
 
                 ClientHandler clientHandler =
-                        new ClientHandler(clientSocket);
+                        new ClientHandler(
+                                clientSocket,
+                                eventManager
+                        );
 
                 clientHandler.start();
             }

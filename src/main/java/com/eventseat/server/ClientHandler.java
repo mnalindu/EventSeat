@@ -9,21 +9,30 @@ import java.net.Socket;
 public class ClientHandler extends Thread {
 
     private final Socket clientSocket;
+    private final EventManager eventManager;
 
-    public ClientHandler(Socket clientSocket) {
+    public ClientHandler(
+            Socket clientSocket,
+            EventManager eventManager
+    ) {
         this.clientSocket = clientSocket;
+        this.eventManager = eventManager;
     }
 
     @Override
     public void run() {
 
         try {
+
             System.out.println(
-                    "Handling client: " + clientSocket.getInetAddress()
+                    "Handling client: " +
+                            clientSocket.getInetAddress()
             );
 
             BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(clientSocket.getInputStream())
+                    new InputStreamReader(
+                            clientSocket.getInputStream()
+                    )
             );
 
             PrintWriter writer = new PrintWriter(
@@ -36,18 +45,46 @@ public class ClientHandler extends Thread {
             while ((message = reader.readLine()) != null) {
 
                 System.out.println(
-                        "Client " +
-                                clientSocket.getInetAddress() +
-                                " says: " +
-                                message
+                        "Client says: " + message
                 );
 
                 if (message.equalsIgnoreCase("EXIT")) {
+
                     writer.println("Goodbye!");
                     break;
-                }
 
-                writer.println("Server received: " + message);
+                } else if (
+                        message.equalsIgnoreCase("GET_EVENT")
+                ) {
+
+                    writer.println(
+                            eventManager.getEventDetails()
+                    );
+
+                } else if (
+                        message.equalsIgnoreCase("GET_SEATS")
+                ) {
+
+                    writer.println(
+                            eventManager.getSeatStatus()
+                    );
+
+                } else if (
+                        message.toUpperCase().startsWith("BOOK:")
+                ) {
+
+                    String seatNumber =
+                            message.substring(5).trim();
+
+                    String result =
+                            eventManager.bookSeat(seatNumber);
+
+                    writer.println(result);
+
+                } else {
+
+                    writer.println("UNKNOWN_COMMAND");
+                }
             }
 
             reader.close();
