@@ -31,7 +31,7 @@ public class EventManager {
         return event.toString();
     }
 
-    public String getSeatStatus() {
+    public synchronized String getSeatStatus() {
 
         StringBuilder result = new StringBuilder();
 
@@ -46,7 +46,7 @@ public class EventManager {
         return result.toString();
     }
 
-    public String bookSeat(String seatNumber) {
+    public synchronized String bookSeat(String seatNumber) {
 
         Seat seat = event.findSeat(seatNumber);
 
