@@ -5,11 +5,19 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ClientHandler extends Thread {
 
     private final Socket clientSocket;
     private final EventManager eventManager;
+
+    private PrintWriter writer;
+
+    // All currently connected clients
+    private static final List<ClientHandler> clients =
+            new CopyOnWriteArrayList<>();
 
     public ClientHandler(
             Socket clientSocket,
@@ -24,20 +32,23 @@ public class ClientHandler extends Thread {
 
         try {
 
-            System.out.println(
-                    "Handling client: " +
-                            clientSocket.getInetAddress()
-            );
-
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(
                             clientSocket.getInputStream()
                     )
             );
 
-            PrintWriter writer = new PrintWriter(
+            writer = new PrintWriter(
                     clientSocket.getOutputStream(),
                     true
+            );
+
+            // Add this client to connected client list
+            clients.add(this);
+
+            System.out.println(
+                    "Client connected. Total clients: "
+                            + clients.size()
             );
 
             String message;
@@ -79,7 +90,19 @@ public class ClientHandler extends Thread {
                     String result =
                             eventManager.bookSeat(seatNumber);
 
+                    // Send booking result to this client
                     writer.println(result);
+
+                    // If booking successful,
+                    // notify ALL connected clients
+                    if (result.startsWith("BOOKING_SUCCESS")) {
+
+                        broadcast(
+                                "SEAT_UPDATE:"
+                                        + seatNumber
+                                        + ":BOOKED"
+                        );
+                    }
 
                 } else {
 
@@ -87,14 +110,36 @@ public class ClientHandler extends Thread {
                 }
             }
 
-            reader.close();
-            writer.close();
-            clientSocket.close();
-
-            System.out.println("Client disconnected.");
-
         } catch (IOException e) {
-            e.printStackTrace();
+
+            System.out.println(
+                    "Client connection closed."
+            );
+
+        } finally {
+
+            clients.remove(this);
+
+            try {
+                clientSocket.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+            System.out.println(
+                    "Client disconnected. Total clients: "
+                            + clients.size()
+            );
+        }
+    }
+
+    private static void broadcast(String message) {
+
+        for (ClientHandler client : clients) {
+
+            if (client.writer != null) {
+                client.writer.println(message);
+            }
         }
     }
 }
