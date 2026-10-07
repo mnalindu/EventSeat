@@ -1,30 +1,47 @@
 package com.eventseat.server;
 
-
 import com.eventseat.model.Event;
 import com.eventseat.model.Seat;
+import com.eventseat.repository.EventRepository;
+
+import java.sql.SQLException;
 
 public class EventManager {
+
     private final Event event;
 
     public EventManager() {
 
-        event = new Event(
-                "E001",
-                "Music Night 2026",
-                "Main Auditorium",
-                "2026-11-20"
-        );
+        EventRepository repository =
+                new EventRepository();
 
-        event.addSeat(new Seat("A1"));
-        event.addSeat(new Seat("A2"));
-        event.addSeat(new Seat("A3"));
-        event.addSeat(new Seat("A4"));
+        try {
 
-        event.addSeat(new Seat("B1"));
-        event.addSeat(new Seat("B2"));
-        event.addSeat(new Seat("B3"));
-        event.addSeat(new Seat("B4"));
+            event = repository.loadEvent("E001");
+
+            if (event == null) {
+                throw new IllegalStateException(
+                        "Event E001 was not found in database."
+                );
+            }
+
+            System.out.println(
+                    "Event loaded from database: "
+                            + event.getName()
+            );
+
+            System.out.println(
+                    "Seats loaded: "
+                            + event.getSeats().size()
+            );
+
+        } catch (SQLException e) {
+
+            throw new RuntimeException(
+                    "Failed to load event from database.",
+                    e
+            );
+        }
     }
 
     public String getEventDetails() {
@@ -33,33 +50,48 @@ public class EventManager {
 
     public synchronized String getSeatStatus() {
 
-        StringBuilder result = new StringBuilder();
+        StringBuilder result =
+                new StringBuilder();
 
         for (Seat seat : event.getSeats()) {
 
-            result.append(seat.getSeatNumber())
-                    .append("=")
-                    .append(seat.isBooked() ? "BOOKED" : "AVAILABLE")
-                    .append(",");
+            result.append(
+                    seat.getSeatNumber()
+            );
+
+            result.append("=");
+
+            result.append(
+                    seat.isBooked()
+                            ? "BOOKED"
+                            : "AVAILABLE"
+            );
+
+            result.append(",");
         }
 
         return result.toString();
     }
 
-    public synchronized String bookSeat(String seatNumber) {
+    public synchronized String bookSeat(
+            String seatNumber
+    ) {
 
-        Seat seat = event.findSeat(seatNumber);
+        Seat seat =
+                event.findSeat(seatNumber);
 
         if (seat == null) {
             return "SEAT_NOT_FOUND";
         }
 
         if (seat.isBooked()) {
-            return "ALREADY_BOOKED:" + seatNumber;
+            return "ALREADY_BOOKED:"
+                    + seatNumber;
         }
 
         seat.setBooked(true);
 
-        return "BOOKING_SUCCESS:" + seatNumber;
+        return "BOOKING_SUCCESS:"
+                + seatNumber;
     }
 }
