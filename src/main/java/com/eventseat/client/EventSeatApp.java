@@ -1,6 +1,7 @@
 package com.eventseat.client;
 
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -10,33 +11,113 @@ import javafx.scene.layout.GridPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
 public class EventSeatApp extends Application {
 
     private Stage stage;
+
+    private ServerConnection serverConnection;
+
     private Label selectedSeatLabel;
+    private Label bookingStatusLabel;
+
     private String selectedSeat = null;
+
+    private final Map<String, Button> seatButtons =
+            new HashMap<>();
 
     @Override
     public void start(Stage stage) {
 
         this.stage = stage;
 
+        connectToServer();
+
         showHomeScreen();
 
         stage.setTitle("EventSeat");
+
+        stage.setOnCloseRequest(event -> {
+
+            if (serverConnection != null) {
+                serverConnection.close();
+            }
+        });
+
         stage.show();
+    }
+
+    private void connectToServer() {
+
+        serverConnection =
+                new ServerConnection(message -> {
+
+                    Platform.runLater(() -> {
+                        handleServerMessage(message);
+                    });
+                });
+
+        try {
+
+            serverConnection.connect(
+                    "localhost",
+                    5000
+            );
+
+            System.out.println(
+                    "Connected to EventSeat server."
+            );
+
+        } catch (IOException e) {
+
+            System.out.println(
+                    "Could not connect to server."
+            );
+        }
     }
 
     private void showHomeScreen() {
 
-        Label title = new Label("EventSeat");
+        Label title =
+                new Label("EventSeat");
+
         title.setStyle(
                 "-fx-font-size: 28px;" +
                         "-fx-font-weight: bold;"
         );
 
         Label subtitle =
-                new Label("Real-Time Event Seat Booking System");
+                new Label(
+                        "Real-Time Event Seat Booking System"
+                );
+
+        Label connectionLabel =
+                new Label();
+
+        if (serverConnection != null
+                && serverConnection.isConnected()) {
+
+            connectionLabel.setText(
+                    "Server: Connected"
+            );
+
+            connectionLabel.setStyle(
+                    "-fx-text-fill: green;"
+            );
+
+        } else {
+
+            connectionLabel.setText(
+                    "Server: Not Connected"
+            );
+
+            connectionLabel.setStyle(
+                    "-fx-text-fill: red;"
+            );
+        }
 
         Button viewEventsButton =
                 new Button("View Events");
@@ -49,18 +130,26 @@ public class EventSeatApp extends Application {
                 20,
                 title,
                 subtitle,
+                connectionLabel,
                 viewEventsButton
         );
 
         layout.setAlignment(Pos.CENTER);
 
         Scene scene =
-                new Scene(layout, 700, 500);
+                new Scene(
+                        layout,
+                        700,
+                        500
+                );
 
         stage.setScene(scene);
     }
 
     private void showEventScreen() {
+
+        selectedSeat = null;
+        seatButtons.clear();
 
         Label title =
                 new Label("Music Night 2026");
@@ -86,15 +175,18 @@ public class EventSeatApp extends Application {
                         "-fx-border-color: black;"
         );
 
-        GridPane seatGrid = new GridPane();
+        GridPane seatGrid =
+                new GridPane();
 
         seatGrid.setHgap(15);
         seatGrid.setVgap(15);
         seatGrid.setAlignment(Pos.CENTER);
 
         String[][] seatNumbers = {
+
                 {"A1", "A2", "A3", "A4"},
                 {"B1", "B2", "B3", "B4"}
+
         };
 
         for (int row = 0;
@@ -109,7 +201,9 @@ public class EventSeatApp extends Application {
                         seatNumbers[row][column];
 
                 Button seatButton =
-                        createSeatButton(seatNumber);
+                        createSeatButton(
+                                seatNumber
+                        );
 
                 seatGrid.add(
                         seatButton,
@@ -120,27 +214,48 @@ public class EventSeatApp extends Application {
         }
 
         selectedSeatLabel =
-                new Label("Selected Seat: None");
+                new Label(
+                        "Selected Seat: None"
+                );
+
+        bookingStatusLabel =
+                new Label("");
 
         Button bookButton =
-                new Button("Book Selected Seat");
+                new Button(
+                        "Book Selected Seat"
+                );
 
         bookButton.setOnAction(event -> {
 
             if (selectedSeat == null) {
 
-                selectedSeatLabel.setText(
+                bookingStatusLabel.setText(
                         "Please select a seat first."
                 );
 
-            } else {
-
-                selectedSeatLabel.setText(
-                        "Selected Seat: "
-                                + selectedSeat
-                                + " (Ready to book)"
-                );
+                return;
             }
+
+            if (serverConnection == null
+                    || !serverConnection.isConnected()) {
+
+                bookingStatusLabel.setText(
+                        "Server is not connected."
+                );
+
+                return;
+            }
+
+            bookingStatusLabel.setText(
+                    "Booking " +
+                            selectedSeat +
+                            "..."
+            );
+
+            serverConnection.send(
+                    "BOOK:" + selectedSeat
+            );
         });
 
         Button backButton =
@@ -158,19 +273,34 @@ public class EventSeatApp extends Application {
                 stageLabel,
                 seatGrid,
                 selectedSeatLabel,
+                bookingStatusLabel,
                 bookButton,
                 backButton
         );
 
         layout.setAlignment(Pos.CENTER);
+
         layout.setPadding(
                 new Insets(30)
         );
 
         Scene scene =
-                new Scene(layout, 700, 550);
+                new Scene(
+                        layout,
+                        700,
+                        550
+                );
 
         stage.setScene(scene);
+
+        // Ask server for latest seat status
+        if (serverConnection != null
+                && serverConnection.isConnected()) {
+
+            serverConnection.send(
+                    "GET_SEATS"
+            );
+        }
     }
 
     private Button createSeatButton(
@@ -185,22 +315,222 @@ public class EventSeatApp extends Application {
                 50
         );
 
-        button.setStyle(
-                "-fx-background-color: lightgreen;" +
-                        "-fx-font-weight: bold;"
-        );
+        setSeatAvailable(button);
 
         button.setOnAction(event -> {
 
-            selectedSeat = seatNumber;
+            selectedSeat =
+                    seatNumber;
 
             selectedSeatLabel.setText(
                     "Selected Seat: "
                             + selectedSeat
             );
+
+            bookingStatusLabel.setText("");
         });
 
+        seatButtons.put(
+                seatNumber,
+                button
+        );
+
         return button;
+    }
+
+    private void handleServerMessage(
+            String message
+    ) {
+
+        System.out.println(
+                "Server: " + message
+        );
+
+        if (message.startsWith(
+                "BOOKING_SUCCESS:"
+        )) {
+
+            String seat =
+                    message.substring(
+                            "BOOKING_SUCCESS:"
+                                    .length()
+                    );
+
+            bookingStatusLabel.setText(
+                    "Booking successful: "
+                            + seat
+            );
+
+        } else if (
+                message.startsWith(
+                        "ALREADY_BOOKED:"
+                )
+        ) {
+
+            String seat =
+                    message.substring(
+                            "ALREADY_BOOKED:"
+                                    .length()
+                    );
+
+            bookingStatusLabel.setText(
+                    "Seat "
+                            + seat
+                            + " is already booked."
+            );
+
+            updateSeat(
+                    seat,
+                    true
+            );
+
+        } else if (
+                message.equals(
+                        "SEAT_NOT_FOUND"
+                )
+        ) {
+
+            bookingStatusLabel.setText(
+                    "Seat not found."
+            );
+
+        } else if (
+                message.startsWith(
+                        "SEAT_UPDATE:"
+                )
+        ) {
+
+            String[] parts =
+                    message.split(":");
+
+            if (parts.length == 3) {
+
+                String seatNumber =
+                        parts[1];
+
+                String status =
+                        parts[2];
+
+                if (status.equalsIgnoreCase(
+                        "BOOKED"
+                )) {
+
+                    updateSeat(
+                            seatNumber,
+                            true
+                    );
+                }
+            }
+
+        } else if (
+                message.contains("=")
+        ) {
+
+            updateAllSeats(message);
+
+        } else if (
+                message.startsWith(
+                        "CONNECTION_ERROR:"
+                )
+        ) {
+
+            if (bookingStatusLabel != null) {
+
+                bookingStatusLabel.setText(
+                        "Connection lost."
+                );
+            }
+        }
+    }
+
+    private void updateAllSeats(
+            String seatData
+    ) {
+
+        String[] seats =
+                seatData.split(",");
+
+        for (String seatInfo : seats) {
+
+            if (seatInfo.isBlank()) {
+                continue;
+            }
+
+            String[] parts =
+                    seatInfo.split("=");
+
+            if (parts.length != 2) {
+                continue;
+            }
+
+            String seatNumber =
+                    parts[0];
+
+            String status =
+                    parts[1];
+
+            boolean booked =
+                    status.equalsIgnoreCase(
+                            "BOOKED"
+                    );
+
+            updateSeat(
+                    seatNumber,
+                    booked
+            );
+        }
+    }
+
+    private void updateSeat(
+            String seatNumber,
+            boolean booked
+    ) {
+
+        Button button =
+                seatButtons.get(
+                        seatNumber
+                );
+
+        if (button == null) {
+            return;
+        }
+
+        if (booked) {
+
+            button.setDisable(true);
+
+            button.setStyle(
+                    "-fx-background-color: lightcoral;" +
+                            "-fx-font-weight: bold;"
+            );
+
+            if (seatNumber.equals(
+                    selectedSeat
+            )) {
+
+                selectedSeat = null;
+
+                selectedSeatLabel.setText(
+                        "Selected Seat: None"
+                );
+            }
+
+        } else {
+
+            setSeatAvailable(button);
+        }
+    }
+
+    private void setSeatAvailable(
+            Button button
+    ) {
+
+        button.setDisable(false);
+
+        button.setStyle(
+                "-fx-background-color: lightgreen;" +
+                        "-fx-font-weight: bold;"
+        );
     }
 
     public static void main(String[] args) {
