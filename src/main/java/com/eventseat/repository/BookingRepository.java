@@ -11,130 +11,92 @@ public class BookingRepository {
 
     public String bookSeat(
             String eventId,
-            String seatNumber
+            String seatNumber,
+            String customerName
     ) throws SQLException {
 
-        Connection connection =
-                DatabaseConnection.getConnection();
+        try (Connection connection =
+                     DatabaseConnection.getConnection()) {
 
-        try {
-
-            // We control commit/rollback manually
             connection.setAutoCommit(false);
 
-            String updateSeatSql =
-                    "UPDATE seats " +
-                            "SET status = 'BOOKED' " +
-                            "WHERE event_id = ? " +
-                            "AND seat_number = ? " +
-                            "AND status = 'AVAILABLE'";
+            try {
 
-            try (PreparedStatement updateStatement =
-                         connection.prepareStatement(updateSeatSql)) {
+                String updateSql =
+                        "UPDATE seats " +
+                                "SET status = 'BOOKED' " +
+                                "WHERE event_id = ? " +
+                                "AND seat_number = ? " +
+                                "AND status = 'AVAILABLE'";
 
-                updateStatement.setString(1, eventId);
-                updateStatement.setString(2, seatNumber);
+                int updatedRows;
 
-                int updatedRows =
-                        updateStatement.executeUpdate();
+                try (PreparedStatement statement =
+                             connection.prepareStatement(updateSql)) {
 
-                /*
-                 * updatedRows == 1 means:
-                 * seat existed AND it was AVAILABLE
-                 */
+                    statement.setString(1, eventId);
+                    statement.setString(2, seatNumber);
+
+                    updatedRows = statement.executeUpdate();
+                }
+
                 if (updatedRows == 1) {
 
-                    String insertBookingSql =
+                    String bookingSql =
                             "INSERT INTO bookings " +
-                                    "(event_id, seat_number) " +
-                                    "VALUES (?, ?)";
+                                    "(event_id, seat_number, customer_name) " +
+                                    "VALUES (?, ?, ?)";
 
-                    try (PreparedStatement bookingStatement =
-                                 connection.prepareStatement(
-                                         insertBookingSql
-                                 )) {
+                    try (PreparedStatement statement =
+                                 connection.prepareStatement(bookingSql)) {
 
-                        bookingStatement.setString(
-                                1,
-                                eventId
-                        );
+                        statement.setString(1, eventId);
+                        statement.setString(2, seatNumber);
+                        statement.setString(3, customerName);
 
-                        bookingStatement.setString(
-                                2,
-                                seatNumber
-                        );
-
-                        bookingStatement.executeUpdate();
+                        statement.executeUpdate();
                     }
 
                     connection.commit();
 
-                    return "BOOKING_SUCCESS:"
-                            + seatNumber;
+                    return "BOOKING_SUCCESS:" + seatNumber;
                 }
 
-                /*
-                 * No row was updated.
-                 * Check whether the seat exists.
-                 */
-                String checkSeatSql =
-                        "SELECT status " +
-                                "FROM seats " +
+                connection.rollback();
+
+                String checkSql =
+                        "SELECT status FROM seats " +
                                 "WHERE event_id = ? " +
                                 "AND seat_number = ?";
 
-                try (PreparedStatement checkStatement =
-                             connection.prepareStatement(
-                                     checkSeatSql
-                             )) {
+                try (PreparedStatement statement =
+                             connection.prepareStatement(checkSql)) {
 
-                    checkStatement.setString(
-                            1,
-                            eventId
-                    );
+                    statement.setString(1, eventId);
+                    statement.setString(2, seatNumber);
 
-                    checkStatement.setString(
-                            2,
-                            seatNumber
-                    );
+                    try (ResultSet result =
+                                 statement.executeQuery()) {
 
-                    ResultSet resultSet =
-                            checkStatement.executeQuery();
+                        if (!result.next()) {
+                            return "SEAT_NOT_FOUND";
+                        }
 
-                    if (!resultSet.next()) {
+                        String status = result.getString("status");
 
-                        connection.rollback();
-
-                        return "SEAT_NOT_FOUND";
+                        if ("BOOKED".equalsIgnoreCase(status)) {
+                            return "ALREADY_BOOKED:" + seatNumber;
+                        }
                     }
-
-                    String status =
-                            resultSet.getString(
-                                    "status"
-                            );
-
-                    connection.rollback();
-
-                    if ("BOOKED".equalsIgnoreCase(status)) {
-
-                        return "ALREADY_BOOKED:"
-                                + seatNumber;
-                    }
-
-                    return "BOOKING_FAILED:"
-                            + seatNumber;
                 }
+
+                return "BOOKING_FAILED:" + seatNumber;
+
+            } catch (SQLException e) {
+
+                connection.rollback();
+                throw e;
             }
-
-        } catch (SQLException e) {
-
-            connection.rollback();
-            throw e;
-
-        } finally {
-
-            connection.setAutoCommit(true);
-            connection.close();
         }
     }
 }

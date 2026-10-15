@@ -102,72 +102,47 @@ public class EventManager {
     // --------------------------------------------------
 
     public synchronized String bookSeat(
-            String seatNumber
+            String seatNumber,
+            String customerName
     ) {
 
-        // Find the requested seat
-        Seat seat =
-                event.findSeat(seatNumber);
+        if (customerName == null
+                || customerName.isBlank()
+                || customerName.length() > 100
+                || customerName.contains(":")) {
 
+            return "INVALID_CUSTOMER_NAME";
+        }
 
-        // Seat does not exist
+        Seat seat = event.findSeat(seatNumber);
+
         if (seat == null) {
-
             return "SEAT_NOT_FOUND";
         }
 
-
-        // Seat is already booked in server memory
         if (seat.isBooked()) {
-
-            return "ALREADY_BOOKED:"
-                    + seatNumber;
+            return "ALREADY_BOOKED:" + seat.getSeatNumber();
         }
-
 
         try {
 
-            // Try to book the seat in MySQL
-            String result =
-                    bookingRepository.bookSeat(
-                            event.getEventId(),
-                            seatNumber
-                    );
+            String result = bookingRepository.bookSeat(
+                    event.getEventId(),
+                    seat.getSeatNumber(),
+                    customerName.trim()
+            );
 
-
-            // Booking successful
-            if (result.startsWith(
-                    "BOOKING_SUCCESS:"
-            )) {
-
-                // Update server memory
-                // to keep it synchronized
-                // with the database
+            if (result.startsWith("BOOKING_SUCCESS:")
+                    || result.startsWith("ALREADY_BOOKED:")) {
 
                 seat.setBooked(true);
             }
-
-
-            // Another client may have booked
-            // the seat before this request
-            else if (result.startsWith(
-                    "ALREADY_BOOKED:"
-            )) {
-
-                // Update server memory
-                // because database says BOOKED
-
-                seat.setBooked(true);
-            }
-
 
             return result;
-
 
         } catch (SQLException e) {
 
             e.printStackTrace();
-
             return "DATABASE_ERROR";
         }
     }

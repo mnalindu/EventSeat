@@ -15,10 +15,11 @@ public class ClientHandler extends Thread {
 
     private PrintWriter writer;
 
-    // All currently connected clients
+    // Store all connected clients
     private static final List<ClientHandler> clients =
             new CopyOnWriteArrayList<>();
 
+    // Constructor
     public ClientHandler(
             Socket clientSocket,
             EventManager eventManager
@@ -30,20 +31,22 @@ public class ClientHandler extends Thread {
     @Override
     public void run() {
 
-        try {
+        try (
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(
+                                clientSocket.getInputStream()
+                        )
+                );
 
-            BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(
-                            clientSocket.getInputStream()
-                    )
-            );
+                PrintWriter output = new PrintWriter(
+                        clientSocket.getOutputStream(),
+                        true
+                )
+        ) {
 
-            writer = new PrintWriter(
-                    clientSocket.getOutputStream(),
-                    true
-            );
+            writer = output;
 
-            // Add this client to connected client list
+            // Register this client
             clients.add(this);
 
             System.out.println(
@@ -53,49 +56,70 @@ public class ClientHandler extends Thread {
 
             String message;
 
+            // Listen for commands continuously
             while ((message = reader.readLine()) != null) {
 
                 System.out.println(
                         "Client says: " + message
                 );
 
+                // EXIT command
                 if (message.equalsIgnoreCase("EXIT")) {
 
                     writer.println("Goodbye!");
                     break;
 
-                } else if (
-                        message.equalsIgnoreCase("GET_EVENT")
-                ) {
+                }
+
+                // Get event information
+                else if (message.equalsIgnoreCase("GET_EVENT")) {
 
                     writer.println(
                             eventManager.getEventDetails()
                     );
 
-                } else if (
-                        message.equalsIgnoreCase("GET_SEATS")
-                ) {
+                }
+
+                // Get seat availability
+                else if (message.equalsIgnoreCase("GET_SEATS")) {
 
                     writer.println(
                             eventManager.getSeatStatus()
                     );
 
-                } else if (
+                }
+
+                // Book a seat with customer name
+                else if (
                         message.toUpperCase().startsWith("BOOK:")
                 ) {
 
+                    // Expected: BOOK:A2:Kamal Perera
+                    String[] parts = message.split(":", 3);
+
+                    if (parts.length != 3) {
+
+                        writer.println("INVALID_CUSTOMER_NAME");
+                        continue;
+                    }
+
                     String seatNumber =
-                            message.substring(5).trim();
+                            parts[1].trim().toUpperCase();
 
-                    String result =
-                            eventManager.bookSeat(seatNumber);
+                    String customerName =
+                            parts[2].trim();
 
-                    // Send booking result to this client
+                    // Book seat through EventManager
+                    String result = eventManager.bookSeat(
+                            seatNumber,
+                            customerName
+                    );
+
+                    // Send booking result
                     writer.println(result);
 
-                    // If booking successful,
-                    // notify ALL connected clients
-                    if (result.startsWith("BOOKING_SUCCESS")) {
+                    // Broadcast successful bookings
+                    if (result.startsWith("BOOKING_SUCCESS:")) {
 
                         broadcast(
                                 "SEAT_UPDATE:"
@@ -104,26 +128,33 @@ public class ClientHandler extends Thread {
                         );
                     }
 
-                } else {
+                }
+
+                // Unknown command
+                else {
 
                     writer.println("UNKNOWN_COMMAND");
+
                 }
             }
 
         } catch (IOException e) {
 
             System.out.println(
-                    "Client connection closed."
+                    "Client connection error: " + e.getMessage()
             );
 
         } finally {
 
+            // Remove disconnected client
             clients.remove(this);
 
             try {
                 clientSocket.close();
             } catch (IOException e) {
-                e.printStackTrace();
+                System.out.println(
+                        "Error closing socket: " + e.getMessage()
+                );
             }
 
             System.out.println(
@@ -133,11 +164,13 @@ public class ClientHandler extends Thread {
         }
     }
 
+    // Send real-time updates to every connected client
     private static void broadcast(String message) {
 
         for (ClientHandler client : clients) {
 
             if (client.writer != null) {
+
                 client.writer.println(message);
             }
         }

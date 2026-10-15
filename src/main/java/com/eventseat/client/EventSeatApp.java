@@ -7,6 +7,7 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
@@ -24,10 +25,17 @@ public class EventSeatApp extends Application {
     private Label selectedSeatLabel;
     private Label bookingStatusLabel;
 
+    // Customer name input field
+    private TextField customerNameField;
+
     private String selectedSeat = null;
 
     private final Map<String, Button> seatButtons =
             new HashMap<>();
+
+    // -----------------------------------------
+    // Application Start
+    // -----------------------------------------
 
     @Override
     public void start(Stage stage) {
@@ -45,10 +53,15 @@ public class EventSeatApp extends Application {
             if (serverConnection != null) {
                 serverConnection.close();
             }
+
         });
 
         stage.show();
     }
+
+    // -----------------------------------------
+    // Connect to Server
+    // -----------------------------------------
 
     private void connectToServer() {
 
@@ -58,6 +71,7 @@ public class EventSeatApp extends Application {
                     Platform.runLater(() -> {
                         handleServerMessage(message);
                     });
+
                 });
 
         try {
@@ -76,26 +90,28 @@ public class EventSeatApp extends Application {
             System.out.println(
                     "Could not connect to server."
             );
+
         }
     }
 
+    // -----------------------------------------
+    // Home Screen
+    // -----------------------------------------
+
     private void showHomeScreen() {
 
-        Label title =
-                new Label("EventSeat");
+        Label title = new Label("EventSeat");
 
         title.setStyle(
                 "-fx-font-size: 28px;" +
                         "-fx-font-weight: bold;"
         );
 
-        Label subtitle =
-                new Label(
-                        "Real-Time Event Seat Booking System"
-                );
+        Label subtitle = new Label(
+                "Real-Time Event Seat Booking System"
+        );
 
-        Label connectionLabel =
-                new Label();
+        Label connectionLabel = new Label();
 
         if (serverConnection != null
                 && serverConnection.isConnected()) {
@@ -136,37 +152,45 @@ public class EventSeatApp extends Application {
 
         layout.setAlignment(Pos.CENTER);
 
-        Scene scene =
-                new Scene(
-                        layout,
-                        700,
-                        500
-                );
+        Scene scene = new Scene(
+                layout,
+                700,
+                500
+        );
 
         stage.setScene(scene);
     }
 
+    // -----------------------------------------
+    // Event Screen
+    // -----------------------------------------
+
     private void showEventScreen() {
 
         selectedSeat = null;
+
         seatButtons.clear();
 
-        Label title =
-                new Label("Music Night 2026");
+        Label title = new Label(
+                "Music Night 2026"
+        );
 
         title.setStyle(
                 "-fx-font-size: 24px;" +
                         "-fx-font-weight: bold;"
         );
 
-        Label venue =
-                new Label("Main Auditorium");
+        Label venue = new Label(
+                "Main Auditorium"
+        );
 
-        Label date =
-                new Label("20 November 2026");
+        Label date = new Label(
+                "20 November 2026"
+        );
 
-        Label stageLabel =
-                new Label("STAGE");
+        Label stageLabel = new Label(
+                "STAGE"
+        );
 
         stageLabel.setStyle(
                 "-fx-font-size: 18px;" +
@@ -175,11 +199,15 @@ public class EventSeatApp extends Application {
                         "-fx-border-color: black;"
         );
 
-        GridPane seatGrid =
-                new GridPane();
+        // -------------------------------------
+        // Seat Grid
+        // -------------------------------------
+
+        GridPane seatGrid = new GridPane();
 
         seatGrid.setHgap(15);
         seatGrid.setVgap(15);
+
         seatGrid.setAlignment(Pos.CENTER);
 
         String[][] seatNumbers = {
@@ -201,9 +229,7 @@ public class EventSeatApp extends Application {
                         seatNumbers[row][column];
 
                 Button seatButton =
-                        createSeatButton(
-                                seatNumber
-                        );
+                        createSeatButton(seatNumber);
 
                 seatGrid.add(
                         seatButton,
@@ -213,21 +239,47 @@ public class EventSeatApp extends Application {
             }
         }
 
-        selectedSeatLabel =
-                new Label(
-                        "Selected Seat: None"
-                );
+        // -------------------------------------
+        // Selected Seat Label
+        // -------------------------------------
 
-        bookingStatusLabel =
-                new Label("");
+        selectedSeatLabel = new Label(
+                "Selected Seat: None"
+        );
 
-        Button bookButton =
-                new Button(
-                        "Book Selected Seat"
-                );
+        // -------------------------------------
+        // Customer Name Input - NEW
+        // -------------------------------------
+
+        Label customerNameLabel = new Label(
+                "Customer Name:"
+        );
+
+        customerNameField = new TextField();
+
+        customerNameField.setPromptText(
+                "Enter your full name"
+        );
+
+        customerNameField.setMaxWidth(250);
+
+        // -------------------------------------
+        // Booking Status Label
+        // -------------------------------------
+
+        bookingStatusLabel = new Label("");
+
+        // -------------------------------------
+        // Book Button
+        // -------------------------------------
+
+        Button bookButton = new Button(
+                "Book Selected Seat"
+        );
 
         bookButton.setOnAction(event -> {
 
+            // Check seat selection
             if (selectedSeat == null) {
 
                 bookingStatusLabel.setText(
@@ -237,6 +289,25 @@ public class EventSeatApp extends Application {
                 return;
             }
 
+            // Get customer name
+            String customerName =
+                    customerNameField.getText().trim();
+
+            // Validate customer name
+            if (customerName.isEmpty()
+                    || customerName.length() > 100
+                    || customerName.contains(":")
+                    || customerName.contains("\n")
+                    || customerName.contains("\r")) {
+
+                bookingStatusLabel.setText(
+                        "Please enter a valid customer name."
+                );
+
+                return;
+            }
+
+            // Check server connection
             if (serverConnection == null
                     || !serverConnection.isConnected()) {
 
@@ -248,22 +319,32 @@ public class EventSeatApp extends Application {
             }
 
             bookingStatusLabel.setText(
-                    "Booking " +
-                            selectedSeat +
-                            "..."
+                    "Booking " + selectedSeat + "..."
             );
 
+            // Send seat and customer name to server
             serverConnection.send(
-                    "BOOK:" + selectedSeat
+                    "BOOK:"
+                            + selectedSeat
+                            + ":"
+                            + customerName
             );
+
         });
 
-        Button backButton =
-                new Button("Back");
+        // -------------------------------------
+        // Back Button
+        // -------------------------------------
+
+        Button backButton = new Button("Back");
 
         backButton.setOnAction(event -> {
             showHomeScreen();
         });
+
+        // -------------------------------------
+        // Layout
+        // -------------------------------------
 
         VBox layout = new VBox(
                 18,
@@ -273,6 +354,8 @@ public class EventSeatApp extends Application {
                 stageLabel,
                 seatGrid,
                 selectedSeatLabel,
+                customerNameLabel,
+                customerNameField,
                 bookingStatusLabel,
                 bookButton,
                 backButton
@@ -284,16 +367,15 @@ public class EventSeatApp extends Application {
                 new Insets(30)
         );
 
-        Scene scene =
-                new Scene(
-                        layout,
-                        700,
-                        550
-                );
+        Scene scene = new Scene(
+                layout,
+                700,
+                650
+        );
 
         stage.setScene(scene);
 
-        // Ask server for latest seat status
+        // Request latest seat availability
         if (serverConnection != null
                 && serverConnection.isConnected()) {
 
@@ -303,12 +385,17 @@ public class EventSeatApp extends Application {
         }
     }
 
+    // -----------------------------------------
+    // Create Seat Buttons
+    // -----------------------------------------
+
     private Button createSeatButton(
             String seatNumber
     ) {
 
-        Button button =
-                new Button(seatNumber);
+        Button button = new Button(
+                seatNumber
+        );
 
         button.setPrefSize(
                 70,
@@ -319,8 +406,7 @@ public class EventSeatApp extends Application {
 
         button.setOnAction(event -> {
 
-            selectedSeat =
-                    seatNumber;
+            selectedSeat = seatNumber;
 
             selectedSeatLabel.setText(
                     "Selected Seat: "
@@ -328,6 +414,7 @@ public class EventSeatApp extends Application {
             );
 
             bookingStatusLabel.setText("");
+
         });
 
         seatButtons.put(
@@ -338,6 +425,10 @@ public class EventSeatApp extends Application {
         return button;
     }
 
+    // -----------------------------------------
+    // Handle Messages From Server
+    // -----------------------------------------
+
     private void handleServerMessage(
             String message
     ) {
@@ -346,70 +437,116 @@ public class EventSeatApp extends Application {
                 "Server: " + message
         );
 
+        // Booking successful
         if (message.startsWith(
                 "BOOKING_SUCCESS:"
         )) {
 
-            String seat =
-                    message.substring(
-                            "BOOKING_SUCCESS:"
-                                    .length()
-                    );
-
-            bookingStatusLabel.setText(
-                    "Booking successful: "
-                            + seat
+            String seat = message.substring(
+                    "BOOKING_SUCCESS:".length()
             );
 
-        } else if (
-                message.startsWith(
-                        "ALREADY_BOOKED:"
-                )
-        ) {
+            if (bookingStatusLabel != null) {
 
-            String seat =
-                    message.substring(
-                            "ALREADY_BOOKED:"
-                                    .length()
-                    );
+                bookingStatusLabel.setText(
+                        "Booking successful: " + seat
+                );
+            }
 
-            bookingStatusLabel.setText(
-                    "Seat "
-                            + seat
-                            + " is already booked."
+        }
+
+        // Already booked
+        else if (message.startsWith(
+                "ALREADY_BOOKED:"
+        )) {
+
+            String seat = message.substring(
+                    "ALREADY_BOOKED:".length()
             );
+
+            if (bookingStatusLabel != null) {
+
+                bookingStatusLabel.setText(
+                        "Seat " + seat
+                                + " is already booked."
+                );
+            }
 
             updateSeat(
                     seat,
                     true
             );
 
-        } else if (
-                message.equals(
-                        "SEAT_NOT_FOUND"
-                )
-        ) {
+        }
 
-            bookingStatusLabel.setText(
-                    "Seat not found."
-            );
+        // Invalid customer name
+        else if (message.equals(
+                "INVALID_CUSTOMER_NAME"
+        )) {
 
-        } else if (
-                message.startsWith(
-                        "SEAT_UPDATE:"
-                )
-        ) {
+            if (bookingStatusLabel != null) {
 
-            String[] parts =
-                    message.split(":");
+                bookingStatusLabel.setText(
+                        "Please enter a valid customer name."
+                );
+            }
+
+        }
+
+        // Seat not found
+        else if (message.equals(
+                "SEAT_NOT_FOUND"
+        )) {
+
+            if (bookingStatusLabel != null) {
+
+                bookingStatusLabel.setText(
+                        "Seat not found."
+                );
+            }
+
+        }
+
+        // Database error
+        else if (message.equals(
+                "DATABASE_ERROR"
+        )) {
+
+            if (bookingStatusLabel != null) {
+
+                bookingStatusLabel.setText(
+                        "Booking failed due to a database error."
+                );
+            }
+
+        }
+
+        // General booking failure
+        else if (message.startsWith(
+                "BOOKING_FAILED:"
+        )) {
+
+            if (bookingStatusLabel != null) {
+
+                bookingStatusLabel.setText(
+                        "Booking failed. Please try again."
+                );
+            }
+
+        }
+
+        // Real-time seat updates
+        else if (message.startsWith(
+                "SEAT_UPDATE:"
+        )) {
+
+            String[] parts = message.split(":");
 
             if (parts.length == 3) {
 
-                String seatNumber =
-                        parts[1];
+                String seatNumber = parts[1];
 
-                String status =
-                        parts[2];
+                String status = parts[2];
 
                 if (status.equalsIgnoreCase(
                         "BOOKED"
@@ -422,17 +559,12 @@ public class EventSeatApp extends Application {
                 }
             }
 
-        } else if (
-                message.contains("=")
-        ) {
+        }
 
-            updateAllSeats(message);
-
-        } else if (
-                message.startsWith(
-                        "CONNECTION_ERROR:"
-                )
-        ) {
+        // Connection error
+        else if (message.startsWith(
+                "CONNECTION_ERROR:"
+        )) {
 
             if (bookingStatusLabel != null) {
 
@@ -440,15 +572,26 @@ public class EventSeatApp extends Application {
                         "Connection lost."
                 );
             }
+
+        }
+
+        // Seat status list
+        else if (message.contains("=")) {
+
+            updateAllSeats(message);
+
         }
     }
+
+    // -----------------------------------------
+    // Update All Seats
+    // -----------------------------------------
 
     private void updateAllSeats(
             String seatData
     ) {
 
-        String[] seats =
-                seatData.split(",");
+        String[] seats = seatData.split(",");
 
         for (String seatInfo : seats) {
 
@@ -456,18 +599,15 @@ public class EventSeatApp extends Application {
                 continue;
             }
 
-            String[] parts =
-                    seatInfo.split("=");
+            String[] parts = seatInfo.split("=");
 
             if (parts.length != 2) {
                 continue;
             }
 
-            String seatNumber =
-                    parts[0];
+            String seatNumber = parts[0].trim();
 
-            String status =
-                    parts[1];
+            String status = parts[1].trim();
 
             boolean booked =
                     status.equalsIgnoreCase(
@@ -481,15 +621,18 @@ public class EventSeatApp extends Application {
         }
     }
 
+    // -----------------------------------------
+    // Update Single Seat
+    // -----------------------------------------
+
     private void updateSeat(
             String seatNumber,
             boolean booked
     ) {
 
-        Button button =
-                seatButtons.get(
-                        seatNumber
-                );
+        Button button = seatButtons.get(
+                seatNumber
+        );
 
         if (button == null) {
             return;
@@ -510,16 +653,24 @@ public class EventSeatApp extends Application {
 
                 selectedSeat = null;
 
-                selectedSeatLabel.setText(
-                        "Selected Seat: None"
-                );
+                if (selectedSeatLabel != null) {
+
+                    selectedSeatLabel.setText(
+                            "Selected Seat: None"
+                    );
+                }
             }
 
         } else {
 
             setSeatAvailable(button);
+
         }
     }
+
+    // -----------------------------------------
+    // Set Available Seat Style
+    // -----------------------------------------
 
     private void setSeatAvailable(
             Button button
@@ -533,7 +684,13 @@ public class EventSeatApp extends Application {
         );
     }
 
+    // -----------------------------------------
+    // Main Method
+    // -----------------------------------------
+
     public static void main(String[] args) {
+
         launch(args);
+
     }
 }

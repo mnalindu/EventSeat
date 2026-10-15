@@ -8,7 +8,7 @@ public class ConcurrencyTestMain {
 
         Runnable bookingTask = () -> {
 
-            String result = eventManager.bookSeat("A1");
+            String result = eventManager.bookSeat("A1", "Test Customer");
 
             System.out.println(
                     Thread.currentThread().getName()
