@@ -17,7 +17,7 @@ public class BookingLookupRepository {
 
         String sql =
                 "SELECT b.booking_id, b.seat_number, " +
-                        "b.customer_name, b.booking_time, " +
+                        "b.customer_name, b.booking_time, b.status, " +
                         "e.event_name, e.venue, e.event_date " +
                         "FROM bookings b " +
                         "JOIN events e ON b.event_id = e.event_id " +
@@ -33,20 +33,45 @@ public class BookingLookupRepository {
             statement.setInt(1, bookingId);
             statement.setString(2, customerName);
 
-            try (ResultSet result = statement.executeQuery()) {
+            try (ResultSet result =
+                         statement.executeQuery()) {
 
                 if (!result.next()) {
                     return "BOOKING_NOT_FOUND";
                 }
 
+                int id = result.getInt("booking_id");
+
+                String seatNumber =
+                        result.getString("seat_number");
+
+                String name =
+                        result.getString("customer_name");
+
+                String eventName =
+                        result.getString("event_name");
+
+                String venue =
+                        result.getString("venue");
+
+                String eventDate =
+                        result.getDate("event_date").toString();
+
+                String bookingStatus =
+                        result.getString("status");
+
+                String bookingTime =
+                        result.getTimestamp("booking_time").toString();
+
                 return "BOOKING_DETAILS:"
-                        + result.getInt("booking_id") + ":"
-                        + result.getString("seat_number") + ":"
-                        + result.getString("customer_name") + ":"
-                        + result.getString("event_name") + ":"
-                        + result.getString("venue") + ":"
-                        + result.getDate("event_date") + ":"
-                        + result.getTimestamp("booking_time");
+                        + id + ":"
+                        + seatNumber + ":"
+                        + name + ":"
+                        + eventName + ":"
+                        + venue + ":"
+                        + eventDate + ":"
+                        + bookingStatus + ":"
+                        + bookingTime;
             }
         }
     }
