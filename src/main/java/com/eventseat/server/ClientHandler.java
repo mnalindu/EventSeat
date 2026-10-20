@@ -15,106 +15,89 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ClientHandler extends Thread {
 
-    private final Socket clientSocket;
+    private final Socket socket;
     private final EventManager eventManager;
-
-    private final BookingLookupRepository bookingLookupRepository =
+    private final BookingLookupRepository lookupRepository =
             new BookingLookupRepository();
 
     private volatile PrintWriter writer;
+    private volatile String subscribedEventId;
 
     private static final List<ClientHandler> clients =
             new CopyOnWriteArrayList<>();
 
-    public ClientHandler(
-            Socket clientSocket,
-            EventManager eventManager
-    ) {
-
-        this.clientSocket = clientSocket;
+    public ClientHandler(Socket socket, EventManager eventManager) {
+        this.socket = socket;
         this.eventManager = eventManager;
     }
 
     @Override
     public void run() {
 
-        try (
-                Socket socket = clientSocket;
-
-                BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(
-                                socket.getInputStream()
-                        )
-                );
-
-                PrintWriter output = new PrintWriter(
-                        socket.getOutputStream(),
-                        true
-                )
-        ) {
+        try (Socket client = socket;
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(client.getInputStream()));
+             PrintWriter output = new PrintWriter(
+                     client.getOutputStream(), true)) {
 
             writer = output;
             clients.add(this);
 
             System.out.println(
-                    "Client connected. Total clients: "
-                            + clients.size()
+                    "Client connected. Total clients: " + clients.size()
             );
 
             String message;
 
             while ((message = reader.readLine()) != null) {
 
-                System.out.println(
-                        "Client says: " + message
-                );
-
-                // ----------------------------------
-                // EXIT COMMAND
-                // ----------------------------------
-
                 if (message.equalsIgnoreCase("EXIT")) {
-
-                    writer.println("Goodbye!");
+                    output.println("Goodbye!");
                     break;
                 }
 
-                // ----------------------------------
-                // GET EVENT DETAILS
-                // ----------------------------------
+                if (message.equalsIgnoreCase("GET_EVENTS")) {
 
-                else if (message.equalsIgnoreCase("GET_EVENT")) {
+                    subscribedEventId = null;
+                    output.println(eventManager.getEvents());
 
-                    writer.println(
-                            eventManager.getEventDetails()
+                } else if (message.equalsIgnoreCase("GET_EVENT")) {
+
+                    output.println(
+                            eventManager.getEventDetails("E001")
                     );
-                }
 
-                // ----------------------------------
-                // GET CURRENT SEATS
-                // ----------------------------------
+                } else if (message.equalsIgnoreCase("GET_SEATS") ||
+                        message.toUpperCase(Locale.ROOT)
+                                .startsWith("GET_SEATS:")) {
 
-                else if (message.equalsIgnoreCase("GET_SEATS")) {
+                    String eventId = message.equalsIgnoreCase("GET_SEATS")
+                            ? "E001"
+                            : message.substring(
+                            "GET_SEATS:".length()
+                    ).trim();
 
-                    writer.println(
-                            eventManager.getSeatStatus()
-                    );
-                }
+                    synchronized (eventManager) {
 
-                // ----------------------------------
-                // FIND BOOKING
-                // ----------------------------------
+                        String seats =
+                                eventManager.getSeatStatus(eventId);
 
-                else if (message.startsWith("GET_BOOKING:")) {
+                        subscribedEventId =
+                                seats.startsWith("SEATS:")
+                                        ? eventId : null;
+
+                        output.println(seats);
+                    }
+
+                } else if (message.startsWith("GET_BOOKING:")) {
 
                     String[] parts = message.split(":", 3);
 
                     if (parts.length != 3 ||
                             parts[2].isBlank() ||
-                            parts[2].length() > 100 ||
-                            parts[2].contains(":")) {
+                            parts[2].length() > 100) {
 
-                        writer.println("INVALID_BOOKING_REQUEST");
+                        output.println("INVALID_BOOKING_REQUEST");
                         continue;
                     }
 
@@ -124,51 +107,35 @@ public class ClientHandler extends Thread {
                                 Integer.parseInt(parts[1]);
 
                         if (bookingId <= 0) {
-
-                            writer.println("INVALID_BOOKING_REQUEST");
+                            output.println("INVALID_BOOKING_REQUEST");
                             continue;
                         }
 
-                        String customerName =
-                                parts[2].trim();
-
-                        String result =
-                                bookingLookupRepository.findBooking(
+                        output.println(
+                                lookupRepository.findBooking(
                                         bookingId,
-                                        customerName
-                                );
-
-                        // Reply only to requesting client
-                        writer.println(result);
+                                        parts[2].trim()
+                                )
+                        );
 
                     } catch (NumberFormatException e) {
 
-                        writer.println("INVALID_BOOKING_REQUEST");
+                        output.println("INVALID_BOOKING_REQUEST");
 
                     } catch (SQLException e) {
 
-                        System.err.println(
-                                "Database error during booking lookup."
-                        );
-
-                        writer.println("DATABASE_ERROR");
+                        output.println("DATABASE_ERROR");
                     }
-                }
 
-                // ----------------------------------
-                // CANCEL BOOKING
-                // ----------------------------------
-
-                else if (message.startsWith("CANCEL_BOOKING:")) {
+                } else if (message.startsWith("CANCEL_BOOKING:")) {
 
                     String[] parts = message.split(":", 3);
 
                     if (parts.length != 3 ||
                             parts[2].isBlank() ||
-                            parts[2].length() > 100 ||
-                            parts[2].contains(":")) {
+                            parts[2].length() > 100) {
 
-                        writer.println("INVALID_CANCEL_REQUEST");
+                        output.println("INVALID_CANCEL_REQUEST");
                         continue;
                     }
 
@@ -178,39 +145,31 @@ public class ClientHandler extends Thread {
                                 Integer.parseInt(parts[1]);
 
                         if (bookingId <= 0) {
-
-                            writer.println("INVALID_CANCEL_REQUEST");
+                            output.println("INVALID_CANCEL_REQUEST");
                             continue;
                         }
 
-                        String customerName =
-                                parts[2].trim();
-
-                        // Keep change and broadcast ordered
                         synchronized (eventManager) {
 
-                            String result =
+                            String reply =
                                     eventManager.cancelBooking(
                                             bookingId,
-                                            customerName
+                                            parts[2].trim()
                                     );
 
-                            writer.println(result);
+                            output.println(reply);
 
-                            // Notify every client after success
-                            if (result.startsWith("CANCEL_SUCCESS:")) {
+                            if (reply.startsWith("CANCEL_SUCCESS:")) {
 
-                                String[] responseParts =
-                                        result.split(":", 3);
+                                String[] result = reply.split(":", 4);
 
-                                if (responseParts.length == 3) {
+                                if (result.length == 4) {
 
-                                    String seatNumber =
-                                            responseParts[2];
-
-                                    broadcast(
+                                    broadcastToEvent(
+                                            result[2],
                                             "SEAT_UPDATE:"
-                                                    + seatNumber
+                                                    + result[2] + ":"
+                                                    + result[3]
                                                     + ":AVAILABLE"
                                     );
                                 }
@@ -219,89 +178,118 @@ public class ClientHandler extends Thread {
 
                     } catch (NumberFormatException e) {
 
-                        writer.println("INVALID_CANCEL_REQUEST");
+                        output.println("INVALID_CANCEL_REQUEST");
                     }
-                }
 
-                // ----------------------------------
-                // BOOK A SEAT
-                // ----------------------------------
+                } else if (message.toUpperCase(Locale.ROOT)
+                        .startsWith("BOOK:")) {
 
-                else if (
-                        message.toUpperCase(Locale.ROOT)
-                                .startsWith("BOOK:")
-                ) {
+                    String[] parts = message.split(":", 4);
 
-                    String[] parts = message.split(":", 3);
+                    String eventId;
+                    String seatNumber;
+                    String customerName;
 
-                    if (parts.length < 2 ||
-                            parts[1].isBlank()) {
+                    if (parts.length == 4) {
 
-                        writer.println("SEAT_NOT_FOUND");
+                        eventId = parts[1].trim();
+
+                        seatNumber = parts[2].trim()
+                                .toUpperCase(Locale.ROOT);
+
+                        customerName = parts[3].trim();
+
+                    } else if (parts.length == 3) {
+
+                        // Support old single-event console command
+                        eventId = "E001";
+
+                        seatNumber = parts[1].trim()
+                                .toUpperCase(Locale.ROOT);
+
+                        customerName = parts[2].trim();
+
+                    } else {
+
+                        output.println("INVALID_BOOKING_REQUEST");
                         continue;
                     }
 
-                    String seatNumber =
-                            parts[1].trim()
-                                    .toUpperCase(Locale.ROOT);
-
-                    String customerName =
-                            parts.length == 3
-                                    ? parts[2].trim()
-                                    : "Guest";
-
-                    if (customerName.isBlank() ||
+                    if (eventId.isBlank() ||
+                            seatNumber.isBlank() ||
+                            customerName.isBlank() ||
                             customerName.length() > 100 ||
                             customerName.contains(":")) {
 
-                        writer.println("INVALID_CUSTOMER_NAME");
+                        output.println("INVALID_BOOKING_REQUEST");
                         continue;
                     }
 
                     synchronized (eventManager) {
 
-                        String result =
-                                eventManager.bookSeat(
-                                        seatNumber,
-                                        customerName
+                        String reply = eventManager.bookSeat(
+                                eventId,
+                                seatNumber,
+                                customerName
+                        );
+
+                        if (reply.startsWith("BOOKING_SUCCESS:")) {
+
+                            String[] result = reply.split(":", 3);
+
+                            if (result.length == 3) {
+
+                                output.println(
+                                        "BOOKING_SUCCESS:"
+                                                + eventId + ":"
+                                                + seatNumber + ":"
+                                                + result[2]
                                 );
 
-                        // Reply to booking client
-                        writer.println(result);
+                                broadcastToEvent(
+                                        eventId,
+                                        "SEAT_UPDATE:"
+                                                + eventId + ":"
+                                                + seatNumber
+                                                + ":BOOKED"
+                                );
 
-                        // Notify all clients after success
-                        if (result.startsWith("BOOKING_SUCCESS:")) {
+                            } else {
 
-                            broadcast(
-                                    "SEAT_UPDATE:"
+                                output.println("DATABASE_ERROR");
+                            }
+
+                        } else if (reply.startsWith("ALREADY_BOOKED:")) {
+
+                            output.println(
+                                    "ALREADY_BOOKED:"
+                                            + eventId + ":"
                                             + seatNumber
-                                            + ":BOOKED"
                             );
+
+                        } else {
+
+                            output.println(reply);
                         }
                     }
-                }
 
-                // ----------------------------------
-                // UNKNOWN COMMAND
-                // ----------------------------------
+                } else {
 
-                else {
-
-                    writer.println("UNKNOWN_COMMAND");
+                    output.println("UNKNOWN_COMMAND");
                 }
             }
 
         } catch (IOException e) {
 
             System.out.println(
-                    "Client connection closed: "
-                            + e.getMessage()
+                    "Client connection closed: " + e.getMessage()
             );
 
         } finally {
 
             clients.remove(this);
             writer = null;
+            subscribedEventId = null;
 
             System.out.println(
                     "Client disconnected. Total clients: "
@@ -310,17 +298,17 @@ public class ClientHandler extends Thread {
         }
     }
 
-    // -----------------------------------------
-    // BROADCAST UPDATE TO ALL CLIENTS
-    // -----------------------------------------
-
-    private static void broadcast(String message) {
+    private static void broadcastToEvent(
+            String eventId,
+            String message
+    ) {
 
         for (ClientHandler client : clients) {
 
             PrintWriter clientWriter = client.writer;
 
-            if (clientWriter != null) {
+            if (clientWriter != null &&
+                    eventId.equals(client.subscribedEventId)) {
 
                 clientWriter.println(message);
             }

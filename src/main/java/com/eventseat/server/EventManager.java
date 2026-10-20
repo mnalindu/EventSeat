@@ -1,229 +1,116 @@
-
 package com.eventseat.server;
 
 import com.eventseat.model.Event;
 import com.eventseat.model.Seat;
+import com.eventseat.repository.BookingCancellationRepository;
 import com.eventseat.repository.BookingRepository;
 import com.eventseat.repository.EventRepository;
-import com.eventseat.repository.BookingCancellationRepository;
 
 import java.sql.SQLException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public class EventManager {
 
-    private final Event event;
-
-    private final BookingRepository bookingRepository;
-
-    private final BookingCancellationRepository cancellationRepository;
+    private final Map<String, Event> events;
+    private final BookingRepository bookingRepository = new BookingRepository();
+    private final BookingCancellationRepository cancellationRepository =
+            new BookingCancellationRepository();
 
     public EventManager() {
-
-        EventRepository eventRepository =
-                new EventRepository();
-
-        bookingRepository = new BookingRepository();
-
-        cancellationRepository =
-                new BookingCancellationRepository();
-
         try {
-
-            // Load event and seats from MySQL
-            event = eventRepository.loadEvent("E001");
-
-            if (event == null) {
-
-                throw new IllegalStateException(
-                        "Event E001 was not found in database."
-                );
+            events = new LinkedHashMap<>(new EventRepository().loadAllEvents());
+            if (events.isEmpty()) {
+                throw new IllegalStateException("No events found in eventseat_db.");
             }
-
-            System.out.println(
-                    "Event loaded from database: "
-                            + event.getName()
-            );
-
-            System.out.println(
-                    "Seats loaded: "
-                            + event.getSeats().size()
-            );
-
+            System.out.println("Loaded " + events.size() + " events from MySQL.");
+            for (Event event : events.values()) {
+                System.out.println(event.getEventId() + " - " + event.getName() +
+                        " (" + event.getSeats().size() + " seats)");
+            }
         } catch (SQLException e) {
-
-            throw new RuntimeException(
-                    "Failed to load event from database.",
-                    e
-            );
+            throw new IllegalStateException("Failed to load events from MySQL.", e);
         }
     }
 
-    // -----------------------------------------
-    // GET EVENT DETAILS
-    // -----------------------------------------
-
-    public String getEventDetails() {
-
-        return event.toString();
+    public synchronized boolean hasEvent(String eventId) {
+        return events.containsKey(eventId);
     }
 
-    // -----------------------------------------
-    // GET SEAT STATUS
-    // -----------------------------------------
+    public synchronized String getEvents() {
+        // Demo protocol: names/venues must not contain '|' or ';'.
+        StringBuilder reply = new StringBuilder("EVENTS:");
+        for (Event event : events.values()) {
+            reply.append(event.getEventId()).append("|")
+                    .append(event.getName()).append("|")
+                    .append(event.getVenue()).append("|")
+                    .append(event.getDate()).append(";");
+        }
+        return reply.toString();
+    }
 
-    public synchronized String getSeatStatus() {
+    public synchronized String getSeatStatus(String eventId) {
+        Event event = events.get(eventId);
+        if (event == null) return "EVENT_NOT_FOUND";
 
-        StringBuilder result = new StringBuilder();
-
+        StringBuilder reply = new StringBuilder("SEATS:").append(eventId).append(":");
         for (Seat seat : event.getSeats()) {
-
-            result.append(seat.getSeatNumber());
-
-            result.append("=");
-
-            if (seat.isBooked()) {
-
-                result.append("BOOKED");
-
-            } else {
-
-                result.append("AVAILABLE");
-            }
-
-            result.append(",");
+            reply.append(seat.getSeatNumber()).append("=")
+                    .append(seat.isBooked() ? "BOOKED" : "AVAILABLE").append(",");
         }
-
-        return result.toString();
+        return reply.toString();
     }
 
-    // -----------------------------------------
-    // BOOK SEAT WITHOUT CUSTOMER NAME
-    // -----------------------------------------
-
-    public synchronized String bookSeat(String seatNumber) {
-
-        return bookSeat(seatNumber, "Guest");
+    public synchronized String getEventDetails(String eventId) {
+        Event event = events.get(eventId);
+        return event == null ? "EVENT_NOT_FOUND" : event.toString();
     }
-
-    // -----------------------------------------
-    // BOOK SEAT WITH CUSTOMER NAME
-    // -----------------------------------------
 
     public synchronized String bookSeat(
-            String seatNumber,
-            String customerName
-    ) {
+            String eventId, String seatNumber, String customerName) {
+
+        Event event = events.get(eventId);
+        if (event == null) return "EVENT_NOT_FOUND";
 
         Seat seat = event.findSeat(seatNumber);
-
-        if (seat == null) {
-
-            return "SEAT_NOT_FOUND";
-        }
-
-        if (customerName == null ||
-                customerName.isBlank() ||
-                customerName.length() > 100) {
-
+        if (seat == null) return "SEAT_NOT_FOUND";
+        if (customerName == null || customerName.isBlank() ||
+                customerName.length() > 100 || customerName.contains(":")) {
             return "INVALID_CUSTOMER_NAME";
         }
-
-        if (seat.isBooked()) {
-
-            return "ALREADY_BOOKED:" + seatNumber;
-        }
+        if (seat.isBooked()) return "ALREADY_BOOKED:" + seatNumber;
 
         try {
+            String reply = bookingRepository.bookSeat(
+                    eventId, seatNumber, customerName.trim());
 
-            // Save booking in MySQL
-            String result =
-                    bookingRepository.bookSeat(
-                            event.getEventId(),
-                            seatNumber,
-                            customerName.trim()
-                    );
-
-            // Update memory when MySQL confirms booking
-            if (result.startsWith("BOOKING_SUCCESS:")) {
-
+            if (reply.startsWith("BOOKING_SUCCESS:") ||
+                    reply.startsWith("ALREADY_BOOKED:")) {
                 seat.setBooked(true);
             }
-
-            // Database may already have a booking
-            else if (result.startsWith("ALREADY_BOOKED:")) {
-
-                seat.setBooked(true);
-            }
-
-            return result;
-
+            return reply;
         } catch (SQLException e) {
-
-            System.err.println(
-                    "Database error while booking seat."
-            );
-
-            e.printStackTrace();
-
+            System.err.println("Database error while booking seat.");
             return "DATABASE_ERROR";
         }
     }
 
-    // -----------------------------------------
-    // CANCEL BOOKING
-    // -----------------------------------------
-
-    public synchronized String cancelBooking(
-            int bookingId,
-            String customerName
-    ) {
-
+    public synchronized String cancelBooking(int bookingId, String customerName) {
         try {
-
-            String result =
-                    cancellationRepository.cancelBooking(
-                            bookingId,
-                            customerName,
-                            event.getEventId()
-                    );
-
-            if (result.startsWith("CANCEL_SUCCESS:")) {
-
-                String[] parts = result.split(":", 3);
-
-                if (parts.length == 3) {
-
-                    String seatNumber = parts[2];
-
-                    Seat seat = event.findSeat(seatNumber);
-
-                    if (seat != null) {
-
-                        // Make the seat available again
-                        seat.setBooked(false);
+            String reply = cancellationRepository.cancelBooking(bookingId, customerName);
+            if (reply.startsWith("CANCEL_SUCCESS:")) {
+                String[] parts = reply.split(":", 4);
+                if (parts.length == 4) {
+                    Event event = events.get(parts[2]);
+                    if (event != null) {
+                        Seat seat = event.findSeat(parts[3]);
+                        if (seat != null) seat.setBooked(false);
                     }
-
-                    System.out.println(
-                            "Booking cancelled: #" + bookingId
-                    );
-
-                    System.out.println(
-                            "Seat " + seatNumber +
-                                    " is now AVAILABLE."
-                    );
                 }
             }
-
-            return result;
-
+            return reply;
         } catch (SQLException e) {
-
-            System.err.println(
-                    "Database error while cancelling booking."
-            );
-
-            e.printStackTrace();
-
+            System.err.println("Database error while cancelling booking.");
             return "DATABASE_ERROR";
         }
     }

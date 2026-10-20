@@ -8,86 +8,50 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public class EventRepository {
 
-    public Event loadEvent(String eventId) throws SQLException {
+    public Map<String, Event> loadAllEvents() throws SQLException {
+        Map<String, Event> events = new LinkedHashMap<>();
 
-        String eventSql =
-                "SELECT event_id, event_name, venue, event_date " +
-                        "FROM events WHERE event_id = ?";
+        try (Connection connection = DatabaseConnection.getConnection()) {
+            String eventSql = "SELECT event_id, event_name, venue, event_date " +
+                    "FROM events ORDER BY event_date, event_id";
 
-        try (Connection connection =
-                     DatabaseConnection.getConnection();
+            try (PreparedStatement statement = connection.prepareStatement(eventSql);
+                 ResultSet result = statement.executeQuery()) {
 
-             PreparedStatement eventStatement =
-                     connection.prepareStatement(eventSql)) {
-
-            eventStatement.setString(1, eventId);
-
-            ResultSet eventResult =
-                    eventStatement.executeQuery();
-
-            if (!eventResult.next()) {
-                return null;
-            }
-
-            Event event = new Event(
-                    eventResult.getString("event_id"),
-                    eventResult.getString("event_name"),
-                    eventResult.getString("venue"),
-                    eventResult.getDate("event_date").toString()
-            );
-
-            loadSeats(connection, event);
-
-            return event;
-        }
-    }
-
-    private void loadSeats(
-            Connection connection,
-            Event event
-    ) throws SQLException {
-
-        String seatSql =
-                "SELECT seat_number, status " +
-                        "FROM seats " +
-                        "WHERE event_id = ? " +
-                        "ORDER BY seat_id";
-
-        try (PreparedStatement seatStatement =
-                     connection.prepareStatement(seatSql)) {
-
-            seatStatement.setString(
-                    1,
-                    event.getEventId()
-            );
-
-            ResultSet seatResult =
-                    seatStatement.executeQuery();
-
-            while (seatResult.next()) {
-
-                String seatNumber =
-                        seatResult.getString(
-                                "seat_number"
-                        );
-
-                String status =
-                        seatResult.getString(
-                                "status"
-                        );
-
-                Seat seat =
-                        new Seat(seatNumber);
-
-                if ("BOOKED".equalsIgnoreCase(status)) {
-                    seat.setBooked(true);
+                while (result.next()) {
+                    Event event = new Event(
+                            result.getString("event_id"),
+                            result.getString("event_name"),
+                            result.getString("venue"),
+                            result.getDate("event_date").toString()
+                    );
+                    events.put(event.getEventId(), event);
                 }
+            }
 
-                event.addSeat(seat);
+            String seatSql = "SELECT seat_number, status FROM seats " +
+                    "WHERE event_id = ? ORDER BY seat_id";
+
+            try (PreparedStatement statement = connection.prepareStatement(seatSql)) {
+                for (Event event : events.values()) {
+                    statement.setString(1, event.getEventId());
+
+                    try (ResultSet result = statement.executeQuery()) {
+                        while (result.next()) {
+                            Seat seat = new Seat(result.getString("seat_number"));
+                            seat.setBooked("BOOKED".equalsIgnoreCase(result.getString("status")));
+                            event.addSeat(seat);
+                        }
+                    }
+                }
             }
         }
+
+        return events;
     }
 }
