@@ -13,12 +13,14 @@ import javafx.scene.control.Label;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class EventSeatApp extends Application {
 
@@ -37,6 +39,14 @@ public class EventSeatApp extends Application {
     private Stage stage;
     private ServerConnection serverConnection;
     private String currentScreen = "HOME";
+
+    private final AtomicBoolean connecting =
+            new AtomicBoolean(false);
+
+    private volatile boolean shuttingDown = false;
+
+    private Label connectionStatusLabel;
+    private Button reconnectButton;
 
     private VBox eventsContainer;
     private GridPane seatGrid;
@@ -70,53 +80,288 @@ public class EventSeatApp extends Application {
 
         stage = primaryStage;
 
-        connectToServer();
-        showHomeScreen();
-
-        stage.setTitle("EventSeat");
-
-        stage.setOnCloseRequest(event -> {
-            if (serverConnection != null) {
-                serverConnection.close();
-            }
-        });
-
-        stage.show();
-    }
-
-    // -----------------------------------------
-    // SERVER CONNECTION
-    // -----------------------------------------
-
-    private void connectToServer() {
-
         serverConnection = new ServerConnection(
                 message -> Platform.runLater(
                         () -> handleServerMessage(message)
                 )
         );
 
-        try {
+        showHomeScreen();
 
-            serverConnection.connect("localhost", 5000);
+        stage.setTitle("EventSeat");
 
-            System.out.println(
-                    "Connected to EventSeat server."
-            );
+        stage.setOnCloseRequest(event -> {
+            shuttingDown = true;
+            serverConnection.close();
+        });
 
-        } catch (IOException e) {
+        stage.show();
 
-            System.out.println(
-                    "Could not connect to server: "
-                            + e.getMessage()
-            );
-        }
+        // Connect without blocking JavaFX UI
+        connectAsync();
     }
 
     private boolean isConnected() {
 
         return serverConnection != null &&
                 serverConnection.isConnected();
+    }
+
+    // -----------------------------------------
+    // CONNECTION STATUS BAR
+    // -----------------------------------------
+
+    private HBox createConnectionBar() {
+
+        connectionStatusLabel = new Label();
+
+        reconnectButton = new Button("Reconnect");
+
+        reconnectButton.setOnAction(event -> {
+            connectAsync();
+        });
+
+        HBox bar = new HBox(
+                12,
+                connectionStatusLabel,
+                reconnectButton
+        );
+
+        bar.setAlignment(Pos.CENTER);
+
+        updateConnectionBar();
+
+        return bar;
+    }
+
+    private void updateConnectionBar() {
+
+        if (connectionStatusLabel == null ||
+                reconnectButton == null) {
+            return;
+        }
+
+        if (connecting.get()) {
+
+            connectionStatusLabel.setText(
+                    "Server: Connecting..."
+            );
+
+            connectionStatusLabel.setStyle(
+                    "-fx-text-fill: darkorange;"
+            );
+
+        } else if (isConnected()) {
+
+            connectionStatusLabel.setText(
+                    "Server: Connected"
+            );
+
+            connectionStatusLabel.setStyle(
+                    "-fx-text-fill: green;"
+            );
+
+        } else {
+
+            connectionStatusLabel.setText(
+                    "Server: Disconnected"
+            );
+
+            connectionStatusLabel.setStyle(
+                    "-fx-text-fill: red;"
+            );
+        }
+
+        reconnectButton.setDisable(
+                connecting.get() || isConnected()
+        );
+    }
+
+    // -----------------------------------------
+    // ASYNCHRONOUS CONNECTION
+    // -----------------------------------------
+
+    private void connectAsync() {
+
+        if (shuttingDown ||
+                isConnected() ||
+                !connecting.compareAndSet(false, true)) {
+            return;
+        }
+
+        updateConnectionBar();
+
+        Thread worker = new Thread(() -> {
+
+            String error = null;
+
+            try {
+
+                serverConnection.connect(
+                        "localhost",
+                        5000
+                );
+
+            } catch (IOException e) {
+
+                error = e.getMessage();
+            }
+
+            final String failure = error;
+
+            if (shuttingDown) {
+                serverConnection.close();
+                connecting.set(false);
+                return;
+            }
+
+            Platform.runLater(() -> {
+
+                connecting.set(false);
+
+                if (shuttingDown) {
+                    serverConnection.close();
+                    return;
+                }
+
+                updateConnectionBar();
+
+                if (isConnected()) {
+
+                    refreshAfterConnection();
+
+                } else {
+
+                    String note =
+                            "Cannot connect to server. " +
+                                    "Start ServerMain and click Reconnect.";
+
+                    if (failure != null) {
+                        System.out.println(
+                                "Connect failed: " + failure
+                        );
+                    }
+
+                    showConnectionNotice(note);
+                }
+            });
+
+        }, "eventseat-connector");
+
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    // -----------------------------------------
+    // REFRESH AFTER RECONNECTING
+    // -----------------------------------------
+
+    private void refreshAfterConnection() {
+
+        if ("EVENTS".equals(currentScreen)) {
+
+            eventsContainer.getChildren().setAll(
+                    new Label("Loading events...")
+            );
+
+            serverConnection.send("GET_EVENTS");
+
+        } else if ("SEATS".equals(currentScreen) &&
+                selectedEvent != null) {
+
+            bookingPending = false;
+            selectedSeat = null;
+
+            selectedSeatLabel.setText(
+                    "Selected Seat: None"
+            );
+
+            bookButton.setDisable(true);
+
+            seatButtons.values().forEach(
+                    button -> button.setDisable(true)
+            );
+
+            bookingStatusLabel.setText(
+                    "Connected. Refreshing seats..."
+            );
+
+            serverConnection.send(
+                    "GET_SEATS:" + selectedEvent.id
+            );
+
+        } else if ("LOOKUP".equals(currentScreen)) {
+
+            verifiedBookingId = "";
+            verifiedCustomerName = "";
+
+            if (cancelButton != null) {
+                cancelButton.setDisable(true);
+            }
+
+            if (bookingLookupResultArea != null) {
+
+                bookingLookupResultArea.setText(
+                        "Reconnected. Search for your booking again."
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------
+    // DISPLAY CONNECTION NOTICE
+    // -----------------------------------------
+
+    private void showConnectionNotice(String note) {
+
+        if ("EVENTS".equals(currentScreen) &&
+                eventsContainer != null) {
+
+            eventsContainer.getChildren().setAll(
+                    new Label(note)
+            );
+
+        } else if ("SEATS".equals(currentScreen) &&
+                bookingStatusLabel != null) {
+
+            bookingStatusLabel.setText(note);
+
+        } else if ("LOOKUP".equals(currentScreen) &&
+                bookingLookupResultArea != null) {
+
+            bookingLookupResultArea.setText(note);
+        }
+    }
+
+    // -----------------------------------------
+    // HANDLE CONNECTION LOSS
+    // -----------------------------------------
+
+    private void onConnectionLost() {
+
+        updateConnectionBar();
+
+        bookingPending = false;
+
+        verifiedBookingId = "";
+        verifiedCustomerName = "";
+
+        if (cancelButton != null) {
+            cancelButton.setDisable(true);
+        }
+
+        if (bookButton != null) {
+            bookButton.setDisable(true);
+        }
+
+        seatButtons.values().forEach(
+                button -> button.setDisable(true)
+        );
+
+        showConnectionNotice(
+                "Server disconnected. " +
+                        "Click Reconnect after restarting it."
+        );
     }
 
     // -----------------------------------------
@@ -133,38 +378,33 @@ public class EventSeatApp extends Application {
         Label title = new Label("EventSeat");
 
         title.setStyle(
-                "-fx-font-size: 28px; -fx-font-weight: bold;"
+                "-fx-font-size: 28px;" +
+                        "-fx-font-weight: bold;"
         );
 
         Label subtitle = new Label(
                 "Real-Time Event Seat Booking System"
         );
 
-        Label connection = new Label(
-                isConnected()
-                        ? "Server: Connected"
-                        : "Server: Not Connected"
-        );
+        HBox connection = createConnectionBar();
 
-        connection.setStyle(
-                isConnected()
-                        ? "-fx-text-fill: green;"
-                        : "-fx-text-fill: red;"
-        );
+        Button viewEvents =
+                new Button("View Events");
 
-        Button viewEvents = new Button("View Events");
         viewEvents.setPrefWidth(190);
 
-        viewEvents.setOnAction(event ->
-                showEventsListScreen()
-        );
+        viewEvents.setOnAction(event -> {
+            showEventsListScreen();
+        });
 
-        Button findBooking = new Button("Find My Booking");
+        Button findBooking =
+                new Button("Find My Booking");
+
         findBooking.setPrefWidth(190);
 
-        findBooking.setOnAction(event ->
-                showBookingLookupScreen()
-        );
+        findBooking.setOnAction(event -> {
+            showBookingLookupScreen();
+        });
 
         VBox layout = new VBox(
                 20,
@@ -178,7 +418,9 @@ public class EventSeatApp extends Application {
         layout.setAlignment(Pos.CENTER);
         layout.setPadding(new Insets(30));
 
-        stage.setScene(new Scene(layout, 720, 540));
+        stage.setScene(
+                new Scene(layout, 720, 540)
+        );
     }
 
     // -----------------------------------------
@@ -192,10 +434,12 @@ public class EventSeatApp extends Application {
         bookingLookupResultArea = null;
         seatButtons.clear();
 
-        Label title = new Label("Available Events");
+        Label title =
+                new Label("Available Events");
 
         title.setStyle(
-                "-fx-font-size: 24px; -fx-font-weight: bold;"
+                "-fx-font-size: 24px;" +
+                        "-fx-font-weight: bold;"
         );
 
         eventsContainer = new VBox(12);
@@ -205,12 +449,16 @@ public class EventSeatApp extends Application {
                 new Label("Loading events...")
         );
 
-        Button back = new Button("Back to Home");
+        Button back =
+                new Button("Back to Home");
 
-        back.setOnAction(event -> showHomeScreen());
+        back.setOnAction(event -> {
+            showHomeScreen();
+        });
 
         VBox layout = new VBox(
                 25,
+                createConnectionBar(),
                 title,
                 eventsContainer,
                 back
@@ -219,7 +467,9 @@ public class EventSeatApp extends Application {
         layout.setAlignment(Pos.TOP_CENTER);
         layout.setPadding(new Insets(35));
 
-        stage.setScene(new Scene(layout, 720, 570));
+        stage.setScene(
+                new Scene(layout, 720, 570)
+        );
 
         if (isConnected()) {
 
@@ -234,13 +484,13 @@ public class EventSeatApp extends Application {
     }
 
     // -----------------------------------------
-    // DISPLAY ALL EVENTS
+    // DISPLAY EVENTS
     // -----------------------------------------
 
     private void displayEvents(String data) {
 
-        if (!"EVENTS".equals(currentScreen)
-                || eventsContainer == null) {
+        if (!"EVENTS".equals(currentScreen) ||
+                eventsContainer == null) {
             return;
         }
 
@@ -254,7 +504,8 @@ public class EventSeatApp extends Application {
                 continue;
             }
 
-            String[] parts = row.split("\\|", 4);
+            String[] parts =
+                    row.split("\\|", 4);
 
             if (parts.length != 4) {
                 continue;
@@ -271,9 +522,9 @@ public class EventSeatApp extends Application {
                     "View Seats - " + event.id
             );
 
-            button.setOnAction(action ->
-                    showEventScreen(event)
-            );
+            button.setOnAction(action -> {
+                showEventScreen(event);
+            });
 
             VBox card = new VBox(
                     6,
@@ -307,7 +558,7 @@ public class EventSeatApp extends Application {
     }
 
     // -----------------------------------------
-    // SELECTED EVENT SCREEN
+    // EVENT SEAT SCREEN
     // -----------------------------------------
 
     private void showEventScreen(EventInfo event) {
@@ -322,16 +573,15 @@ public class EventSeatApp extends Application {
         Label title = new Label(event.name);
 
         title.setStyle(
-                "-fx-font-size: 24px; -fx-font-weight: bold;"
+                "-fx-font-size: 24px;" +
+                        "-fx-font-weight: bold;"
         );
 
-        Label venue = new Label(
-                "Venue: " + event.venue
-        );
+        Label venue =
+                new Label("Venue: " + event.venue);
 
-        Label date = new Label(
-                "Date: " + event.date
-        );
+        Label date =
+                new Label("Date: " + event.date);
 
         Label stageLabel = new Label("STAGE");
 
@@ -354,9 +604,8 @@ public class EventSeatApp extends Application {
                 0
         );
 
-        selectedSeatLabel = new Label(
-                "Selected Seat: None"
-        );
+        selectedSeatLabel =
+                new Label("Selected Seat: None");
 
         bookingStatusLabel = new Label("");
 
@@ -368,11 +617,12 @@ public class EventSeatApp extends Application {
 
         nameField.setMaxWidth(260);
 
-        bookButton = new Button(
-                "Book Selected Seat"
-        );
+        bookButton =
+                new Button("Book Selected Seat");
 
-        bookButton.setDisable(bookingPending);
+        bookButton.setDisable(
+                bookingPending || !isConnected()
+        );
 
         bookButton.setOnAction(action -> {
 
@@ -392,9 +642,9 @@ public class EventSeatApp extends Application {
             String customerName =
                     nameField.getText().trim();
 
-            if (customerName.isEmpty()
-                    || customerName.length() > 100
-                    || customerName.contains(":")) {
+            if (customerName.isEmpty() ||
+                    customerName.length() > 100 ||
+                    customerName.contains(":")) {
 
                 bookingStatusLabel.setText(
                         "Enter a valid customer name."
@@ -422,22 +672,34 @@ public class EventSeatApp extends Application {
                     "Booking " + selectedSeat + "..."
             );
 
-            serverConnection.send(
-                    "BOOK:"
-                            + selectedEvent.id + ":"
-                            + selectedSeat + ":"
-                            + customerName
+            boolean sent = serverConnection.send(
+                    "BOOK:" +
+                            selectedEvent.id + ":" +
+                            selectedSeat + ":" +
+                            customerName
             );
+
+            if (!sent) {
+
+                bookingPending = false;
+                bookButton.setDisable(true);
+
+                bookingStatusLabel.setText(
+                        "Request not sent. Please reconnect."
+                );
+            }
         });
 
-        Button back = new Button("Back to Events");
+        Button back =
+                new Button("Back to Events");
 
-        back.setOnAction(action ->
-                showEventsListScreen()
-        );
+        back.setOnAction(action -> {
+            showEventsListScreen();
+        });
 
         VBox layout = new VBox(
                 15,
+                createConnectionBar(),
                 title,
                 venue,
                 date,
@@ -476,7 +738,7 @@ public class EventSeatApp extends Application {
     }
 
     // -----------------------------------------
-    // DISPLAY EVENT SEATS
+    // DISPLAY SEATS
     // -----------------------------------------
 
     private void displaySeats(
@@ -484,9 +746,9 @@ public class EventSeatApp extends Application {
             String data
     ) {
 
-        if (!"SEATS".equals(currentScreen)
-                || selectedEvent == null
-                || !eventId.equals(selectedEvent.id)) {
+        if (!"SEATS".equals(currentScreen) ||
+                selectedEvent == null ||
+                !eventId.equals(selectedEvent.id)) {
             return;
         }
 
@@ -501,7 +763,8 @@ public class EventSeatApp extends Application {
                 continue;
             }
 
-            String[] parts = row.split("=", 2);
+            String[] parts =
+                    row.split("=", 2);
 
             if (parts.length != 2) {
                 continue;
@@ -526,6 +789,23 @@ public class EventSeatApp extends Application {
             index++;
         }
 
+        if (bookButton != null) {
+
+            bookButton.setDisable(
+                    bookingPending || !isConnected()
+            );
+        }
+
+        if (bookingStatusLabel != null &&
+                !bookingPending) {
+
+            bookingStatusLabel.setText(
+                    index == 0
+                            ? "No seats for this event."
+                            : "Seats are up to date."
+            );
+        }
+
         if (index == 0) {
 
             seatGrid.add(
@@ -546,7 +826,9 @@ public class EventSeatApp extends Application {
             String seatNumber
     ) {
 
-        Button button = new Button(seatNumber);
+        Button button =
+                new Button(seatNumber);
+
         button.setPrefSize(70, 50);
 
         seatButtons.put(seatNumber, button);
@@ -568,7 +850,7 @@ public class EventSeatApp extends Application {
     }
 
     // -----------------------------------------
-    // UPDATE SEAT AVAILABILITY
+    // AVAILABLE SEAT STYLE
     // -----------------------------------------
 
     private void setSeatAvailable(Button button) {
@@ -581,12 +863,17 @@ public class EventSeatApp extends Application {
         );
     }
 
+    // -----------------------------------------
+    // UPDATE ONE SEAT
+    // -----------------------------------------
+
     private void updateSeat(
             String seatNumber,
             boolean booked
     ) {
 
-        Button button = seatButtons.get(seatNumber);
+        Button button =
+                seatButtons.get(seatNumber);
 
         if (button == null) {
             return;
@@ -626,30 +913,28 @@ public class EventSeatApp extends Application {
     private void showBookingLookupScreen() {
 
         currentScreen = "LOOKUP";
-
         selectedEvent = null;
         seatButtons.clear();
 
         verifiedBookingId = "";
         verifiedCustomerName = "";
 
-        Label title = new Label(
-                "Find My Booking"
-        );
+        Label title =
+                new Label("Find My Booking");
 
         title.setStyle(
-                "-fx-font-size: 24px; -fx-font-weight: bold;"
+                "-fx-font-size: 24px;" +
+                        "-fx-font-weight: bold;"
         );
 
-        TextField idField = new TextField();
+        TextField idField =
+                new TextField();
 
-        idField.setPromptText(
-                "Enter Booking ID"
-        );
-
+        idField.setPromptText("Enter Booking ID");
         idField.setMaxWidth(250);
 
-        TextField nameField = new TextField();
+        TextField nameField =
+                new TextField();
 
         nameField.setPromptText(
                 "Enter Customer Name"
@@ -657,16 +942,16 @@ public class EventSeatApp extends Application {
 
         nameField.setMaxWidth(250);
 
-        bookingLookupResultArea = new TextArea();
+        bookingLookupResultArea =
+                new TextArea();
 
         bookingLookupResultArea.setEditable(false);
         bookingLookupResultArea.setWrapText(true);
         bookingLookupResultArea.setMaxWidth(440);
         bookingLookupResultArea.setPrefRowCount(9);
 
-        cancelButton = new Button(
-                "Cancel Booking"
-        );
+        cancelButton =
+                new Button("Cancel Booking");
 
         cancelButton.setDisable(true);
 
@@ -675,13 +960,9 @@ public class EventSeatApp extends Application {
                         "-fx-font-weight: bold;"
         );
 
-        // ----------------------------------
-        // FIND BOOKING
-        // ----------------------------------
-
-        Button findButton = new Button(
-                "Find Booking"
-        );
+        // FIND BUTTON
+        Button findButton =
+                new Button("Find Booking");
 
         findButton.setOnAction(action -> {
 
@@ -691,14 +972,11 @@ public class EventSeatApp extends Application {
             String name =
                     nameField.getText().trim();
 
-            if (!validBookingInput(
-                    bookingId,
-                    name
-            )) {
+            if (!validBookingInput(bookingId, name)) {
 
                 bookingLookupResultArea.setText(
-                        "Please enter a valid Booking ID "
-                                + "and Customer Name."
+                        "Please enter a valid Booking ID " +
+                                "and Customer Name."
                 );
 
                 return;
@@ -724,16 +1002,13 @@ public class EventSeatApp extends Application {
             );
 
             serverConnection.send(
-                    "GET_BOOKING:"
-                            + bookingId + ":"
-                            + name
+                    "GET_BOOKING:" +
+                            bookingId + ":" +
+                            name
             );
         });
 
-        // ----------------------------------
-        // CANCEL BOOKING
-        // ----------------------------------
-
+        // CANCEL BUTTON
         cancelButton.setOnAction(action -> {
 
             String bookingId =
@@ -742,8 +1017,8 @@ public class EventSeatApp extends Application {
             String name =
                     nameField.getText().trim();
 
-            if (!bookingId.equals(verifiedBookingId)
-                    || !name.equals(verifiedCustomerName)) {
+            if (!bookingId.equals(verifiedBookingId) ||
+                    !name.equals(verifiedCustomerName)) {
 
                 bookingLookupResultArea.setText(
                         "Find this booking again before cancelling."
@@ -769,8 +1044,8 @@ public class EventSeatApp extends Application {
             confirm.setTitle("Cancel Booking");
 
             confirm.setHeaderText(
-                    "Are you sure you want to cancel booking #"
-                            + bookingId + "?"
+                    "Are you sure you want to cancel booking #" +
+                            bookingId + "?"
             );
 
             boolean accepted =
@@ -789,22 +1064,22 @@ public class EventSeatApp extends Application {
             );
 
             serverConnection.send(
-                    "CANCEL_BOOKING:"
-                            + bookingId + ":"
-                            + name
+                    "CANCEL_BOOKING:" +
+                            bookingId + ":" +
+                            name
             );
         });
 
-        Button back = new Button(
-                "Back to Home"
-        );
+        Button back =
+                new Button("Back to Home");
 
-        back.setOnAction(action ->
-                showHomeScreen()
-        );
+        back.setOnAction(action -> {
+            showHomeScreen();
+        });
 
         VBox layout = new VBox(
                 14,
+                createConnectionBar(),
                 title,
                 new Label("Booking ID:"),
                 idField,
@@ -833,10 +1108,10 @@ public class EventSeatApp extends Application {
             String customerName
     ) {
 
-        return bookingId.matches("[1-9][0-9]*")
-                && !customerName.isBlank()
-                && customerName.length() <= 100
-                && !customerName.contains(":");
+        return bookingId.matches("[1-9][0-9]*") &&
+                !customerName.isBlank() &&
+                customerName.length() <= 100 &&
+                !customerName.contains(":");
     }
 
     // -----------------------------------------
@@ -847,21 +1122,27 @@ public class EventSeatApp extends Application {
 
         System.out.println("Server: " + message);
 
-        // ----------------------------------
-        // EVENT LIST
-        // ----------------------------------
+        // CONNECTION LOST
+        if (message.startsWith("CONNECTION_ERROR:")) {
 
+            if (!isConnected()) {
+                onConnectionLost();
+            }
+
+            return;
+        }
+
+        // EVENTS
         if (message.startsWith("EVENTS:")) {
 
             displayEvents(
                     message.substring("EVENTS:".length())
             );
 
-            // ----------------------------------
-            // INITIAL SEAT DATA
-            // ----------------------------------
+        }
 
-        } else if (message.startsWith("SEATS:")) {
+        // SEATS
+        else if (message.startsWith("SEATS:")) {
 
             String[] parts =
                     message.split(":", 3);
@@ -874,19 +1155,18 @@ public class EventSeatApp extends Application {
                 );
             }
 
-            // ----------------------------------
-            // REAL-TIME SEAT UPDATE
-            // ----------------------------------
+        }
 
-        } else if (message.startsWith("SEAT_UPDATE:")) {
+        // REAL-TIME UPDATE
+        else if (message.startsWith("SEAT_UPDATE:")) {
 
             String[] parts =
                     message.split(":", 4);
 
-            if (parts.length == 4
-                    && "SEATS".equals(currentScreen)
-                    && selectedEvent != null
-                    && selectedEvent.id.equals(parts[1])) {
+            if (parts.length == 4 &&
+                    "SEATS".equals(currentScreen) &&
+                    selectedEvent != null &&
+                    selectedEvent.id.equals(parts[1])) {
 
                 updateSeat(
                         parts[2],
@@ -894,11 +1174,10 @@ public class EventSeatApp extends Application {
                 );
             }
 
-            // ----------------------------------
-            // BOOKING SUCCESS
-            // ----------------------------------
+        }
 
-        } else if (message.startsWith("BOOKING_SUCCESS:")) {
+        // BOOKING SUCCESS
+        else if (message.startsWith("BOOKING_SUCCESS:")) {
 
             String[] parts =
                     message.split(":", 4);
@@ -911,9 +1190,9 @@ public class EventSeatApp extends Application {
 
             if (parts.length == 4) {
 
-                if ("SEATS".equals(currentScreen)
-                        && selectedEvent != null
-                        && selectedEvent.id.equals(parts[1])) {
+                if ("SEATS".equals(currentScreen) &&
+                        selectedEvent != null &&
+                        selectedEvent.id.equals(parts[1])) {
 
                     updateSeat(parts[2], true);
 
@@ -930,11 +1209,10 @@ public class EventSeatApp extends Application {
                 );
             }
 
-            // ----------------------------------
-            // ALREADY BOOKED
-            // ----------------------------------
+        }
 
-        } else if (message.startsWith("ALREADY_BOOKED:")) {
+        // ALREADY BOOKED
+        else if (message.startsWith("ALREADY_BOOKED:")) {
 
             bookingPending = false;
 
@@ -945,23 +1223,23 @@ public class EventSeatApp extends Application {
             String[] parts =
                     message.split(":", 3);
 
-            if (parts.length == 3
-                    && "SEATS".equals(currentScreen)
-                    && selectedEvent != null
-                    && selectedEvent.id.equals(parts[1])) {
+            if (parts.length == 3 &&
+                    "SEATS".equals(currentScreen) &&
+                    selectedEvent != null &&
+                    selectedEvent.id.equals(parts[1])) {
 
                 updateSeat(parts[2], true);
 
                 bookingStatusLabel.setText(
-                        "Seat " + parts[2] + " is already booked."
+                        "Seat " + parts[2] +
+                                " is already booked."
                 );
             }
 
-            // ----------------------------------
-            // BOOKING FAILED
-            // ----------------------------------
+        }
 
-        } else if (message.startsWith("BOOKING_FAILED:")) {
+        // BOOKING FAILED
+        else if (message.startsWith("BOOKING_FAILED:")) {
 
             bookingPending = false;
 
@@ -969,27 +1247,26 @@ public class EventSeatApp extends Application {
                 bookButton.setDisable(false);
             }
 
-            if ("SEATS".equals(currentScreen)
-                    && bookingStatusLabel != null) {
+            if ("SEATS".equals(currentScreen) &&
+                    bookingStatusLabel != null) {
 
                 bookingStatusLabel.setText(
                         "Booking failed. Please refresh the seat list."
                 );
             }
 
-            // ----------------------------------
-            // CANCELLATION SUCCESS
-            // ----------------------------------
+        }
 
-        } else if (message.startsWith("CANCEL_SUCCESS:")) {
+        // CANCELLATION SUCCESS
+        else if (message.startsWith("CANCEL_SUCCESS:")) {
 
             String[] parts =
                     message.split(":", 4);
 
             if (parts.length == 4) {
 
-                if ("LOOKUP".equals(currentScreen)
-                        && bookingLookupResultArea != null) {
+                if ("LOOKUP".equals(currentScreen) &&
+                        bookingLookupResultArea != null) {
 
                     bookingLookupResultArea.setText(
                             "BOOKING CANCELLED SUCCESSFULLY!\n\n" +
@@ -1003,22 +1280,21 @@ public class EventSeatApp extends Application {
                     verifiedBookingId = "";
                 }
 
-                if ("SEATS".equals(currentScreen)
-                        && selectedEvent != null
-                        && selectedEvent.id.equals(parts[2])) {
+                if ("SEATS".equals(currentScreen) &&
+                        selectedEvent != null &&
+                        selectedEvent.id.equals(parts[2])) {
 
                     updateSeat(parts[3], false);
                 }
             }
 
-            // ----------------------------------
-            // ALREADY CANCELLED
-            // ----------------------------------
+        }
 
-        } else if (message.startsWith("ALREADY_CANCELLED:")) {
+        // ALREADY CANCELLED
+        else if (message.startsWith("ALREADY_CANCELLED:")) {
 
-            if ("LOOKUP".equals(currentScreen)
-                    && bookingLookupResultArea != null) {
+            if ("LOOKUP".equals(currentScreen) &&
+                    bookingLookupResultArea != null) {
 
                 bookingLookupResultArea.setText(
                         "This booking is already cancelled."
@@ -1027,19 +1303,18 @@ public class EventSeatApp extends Application {
                 cancelButton.setDisable(true);
             }
 
-            // ----------------------------------
-            // BOOKING DETAILS
-            // ----------------------------------
+        }
 
-        } else if (message.startsWith("BOOKING_DETAILS:")) {
+        // BOOKING DETAILS
+        else if (message.startsWith("BOOKING_DETAILS:")) {
 
             String[] parts =
                     message.split(":", 9);
 
-            if (parts.length == 9
-                    && "LOOKUP".equals(currentScreen)
-                    && bookingLookupResultArea != null
-                    && parts[1].equals(requestedBookingId)) {
+            if (parts.length == 9 &&
+                    "LOOKUP".equals(currentScreen) &&
+                    bookingLookupResultArea != null &&
+                    parts[1].equals(requestedBookingId)) {
 
                 bookingLookupResultArea.setText(
                         "BOOKING FOUND\n\n" +
@@ -1063,19 +1338,16 @@ public class EventSeatApp extends Application {
                 );
             }
 
-            // ----------------------------------
-            // BOOKING LOOKUP ERRORS
-            // ----------------------------------
+        }
 
-        } else if (
-                message.equals("BOOKING_NOT_FOUND")
-                        || message.equals("INVALID_BOOKING_REQUEST")
-                        || message.equals("INVALID_CANCEL_REQUEST")
-                        || message.equals("CANCEL_FAILED")
-        ) {
+        // BOOKING LOOKUP ERRORS
+        else if (message.equals("BOOKING_NOT_FOUND") ||
+                message.equals("INVALID_BOOKING_REQUEST") ||
+                message.equals("INVALID_CANCEL_REQUEST") ||
+                message.equals("CANCEL_FAILED")) {
 
-            if ("LOOKUP".equals(currentScreen)
-                    && bookingLookupResultArea != null) {
+            if ("LOOKUP".equals(currentScreen) &&
+                    bookingLookupResultArea != null) {
 
                 bookingLookupResultArea.setText(
                         message.replace('_', ' ')
@@ -1084,18 +1356,14 @@ public class EventSeatApp extends Application {
                 cancelButton.setDisable(true);
             }
 
-            // ----------------------------------
-            // GENERAL ERRORS
-            // ----------------------------------
+        }
 
-        } else if (
-                message.equals("DATABASE_ERROR")
-                        || message.equals("SEAT_NOT_FOUND")
-                        || message.equals("EVENT_NOT_FOUND")
-                        || message.equals("INVALID_CUSTOMER_NAME")
-                        || message.equals("INVALID_BOOKING_REQUEST")
-                        || message.startsWith("CONNECTION_ERROR:")
-        ) {
+        // GENERAL ERRORS
+        else if (message.equals("DATABASE_ERROR") ||
+                message.equals("SEAT_NOT_FOUND") ||
+                message.equals("EVENT_NOT_FOUND") ||
+                message.equals("INVALID_CUSTOMER_NAME") ||
+                message.equals("UNKNOWN_COMMAND")) {
 
             bookingPending = false;
 
@@ -1103,22 +1371,22 @@ public class EventSeatApp extends Application {
                 bookButton.setDisable(false);
             }
 
-            if ("LOOKUP".equals(currentScreen)
-                    && bookingLookupResultArea != null) {
+            if ("LOOKUP".equals(currentScreen) &&
+                    bookingLookupResultArea != null) {
 
                 bookingLookupResultArea.setText(
                         message.replace('_', ' ')
                 );
 
-            } else if ("SEATS".equals(currentScreen)
-                    && bookingStatusLabel != null) {
+            } else if ("SEATS".equals(currentScreen) &&
+                    bookingStatusLabel != null) {
 
                 bookingStatusLabel.setText(
                         message.replace('_', ' ')
                 );
 
-            } else if ("EVENTS".equals(currentScreen)
-                    && eventsContainer != null) {
+            } else if ("EVENTS".equals(currentScreen) &&
+                    eventsContainer != null) {
 
                 eventsContainer.getChildren().setAll(
                         new Label(
@@ -1173,6 +1441,7 @@ public class EventSeatApp extends Application {
     // -----------------------------------------
 
     public static void main(String[] args) {
+
         launch(args);
     }
 }
